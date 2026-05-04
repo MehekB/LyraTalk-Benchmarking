@@ -9,7 +9,10 @@ brew install livekit-cli
 windows do: 
 winget install LiveKit.LiveKitCLIf
 
+
+
 2. Run these commands 
+(u might need to install uv ask gpt if it bugs)
 uv sync
 lk cloud auth
 uv run python src/agent.py download-files
@@ -21,9 +24,9 @@ LIVEKIT_API_SECRET="xSSa1Ko2nvjYIlOtIikgPFVLH0L0wQOW1JG2St98ovE"
 LIVEKIT_URL="wss://lyratalk-5x60wac9.livekit.cloud"
 --------------------------------------
 
-Running the code: 
+Running the code pick one of the below:
 
-Talk in the terminal
+Talk in the terminal (ive only tried this one)
 uv run python src/agent.py console
 
 Dev (frontend / telephony)
@@ -31,3 +34,5 @@ uv run python src/agent.py dev
 
 Production
 uv run python src/agent.py start
+
+it should create a folder under agent/transcripts that writes down what was said in call
