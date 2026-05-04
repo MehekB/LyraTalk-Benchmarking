@@ -1,0 +1,11 @@
+uv sync
+lk cloud auth
+uv run python src/agent.py download-files
+
+Goal	Command
+Talk in the terminal
+uv run python src/agent.py console
+Dev (frontend / telephony)
+uv run python src/agent.py dev
+Production
+uv run python src/agent.py start
