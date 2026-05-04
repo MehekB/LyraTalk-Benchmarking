@@ -7,16 +7,18 @@ macos do:
 brew install livekit-cli
 
 windows do: 
-pip install uv 
-OR 
 winget install LiveKit.LiveKitCLIf
-----------------
 
 2. Run these commands 
 uv sync
 lk cloud auth
 uv run python src/agent.py download-files
 
+
+3. Create a folder under agent/ called ".env.local" and paste in the below
+LIVEKIT_API_KEY="API7d4ffGAy6xLQ"
+LIVEKIT_API_SECRET="xSSa1Ko2nvjYIlOtIikgPFVLH0L0wQOW1JG2St98ovE"
+LIVEKIT_URL="wss://lyratalk-5x60wac9.livekit.cloud"
 --------------------------------------
 
 Running the code: 

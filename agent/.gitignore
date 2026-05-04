@@ -11,6 +11,9 @@ KMS
 .pytest_cache
 .ruff_cache
 
+# Local session transcripts (see TRANSCRIPT_DIR in agent)
+transcripts/
+
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/

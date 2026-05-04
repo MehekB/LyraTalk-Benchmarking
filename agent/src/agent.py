@@ -1,16 +1,23 @@
 import logging
+import os
+import re
+import threading
+import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    ConversationItemAddedEvent,
     JobContext,
     JobProcess,
     cli,
     inference,
     room_io,
 )
+from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -58,6 +65,53 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
+def _safe_filename_part(value: str, max_len: int = 96) -> str:
+    cleaned = re.sub(r"[^\w.\-]+", "_", value.strip() or "x", flags=re.ASCII)
+    return (cleaned[:max_len] if cleaned else "x").strip("_") or "x"
+
+
+def _transcript_file_path(ctx: JobContext) -> Path:
+    base_dir = os.environ.get("TRANSCRIPT_DIR", "transcripts").strip()
+    root = Path(base_dir).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    room_part = _safe_filename_part(ctx.room.name or "room")
+    job_part = _safe_filename_part(str(ctx.job.id))
+    ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    return root / f"{room_part}_{job_part}_{ts}.txt"
+
+
+def _attach_transcript_file(session: AgentSession, ctx: JobContext, path: Path) -> None:
+    lock = threading.Lock()
+    with path.open("w", encoding="utf-8") as f:
+        f.write(
+            "# Session transcript\n"
+            f"# room={ctx.room.name!r}\n"
+            f"# job_id={ctx.job.id!r}\n"
+            f"# started_utc={time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}\n\n"
+        )
+
+    def on_conversation_item(ev: ConversationItemAddedEvent) -> None:
+        item = ev.item
+        if not isinstance(item, ChatMessage):
+            return
+        if item.role not in ("user", "assistant"):
+            return
+        text = (item.text_content or "").strip()
+        if not text:
+            return
+        if item.role == "user":
+            block = f"You:\n{text}\n\n"
+        else:
+            suffix = " (interrupted)" if item.interrupted else ""
+            block = f"Assistant:{suffix}\n{text}\n\n"
+        with lock:
+            with path.open("a", encoding="utf-8") as out:
+                out.write(block)
+
+    session.on("conversation_item_added", on_conversation_item)
+    logger.info("Writing transcript to %s", path.resolve())
+
+
 @server.rtc_session(agent_name="lyratalk")
 async def my_agent(ctx: JobContext):
     # Logging setup
@@ -87,6 +141,14 @@ async def my_agent(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
+
+    if os.environ.get("TRANSCRIPT_DISABLE", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        transcript_path = _transcript_file_path(ctx)
+        _attach_transcript_file(session, ctx, transcript_path)
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
     # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))

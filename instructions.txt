@@ -1,0 +1,7 @@
+lwk some instructions
+
+dashboard code in the client/ folder
+
+livekit agent code in the agent/ folder
+
+look at agent/howtorun.txt to start it up
