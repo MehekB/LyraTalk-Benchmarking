@@ -1,11 +1,31 @@
+## first time setup: 
+
+1. install the livekitCLI 
+
+
+macos do: 
+brew install livekit-cli
+
+windows do: 
+pip install uv 
+OR 
+winget install LiveKit.LiveKitCLIf
+----------------
+
+2. Run these commands 
 uv sync
 lk cloud auth
 uv run python src/agent.py download-files
 
-Goal	Command
+--------------------------------------
+
+Running the code: 
+
 Talk in the terminal
 uv run python src/agent.py console
+
 Dev (frontend / telephony)
 uv run python src/agent.py dev
+
 Production
 uv run python src/agent.py start
