@@ -1,25 +1,27 @@
 import logging
 import os
-import re
-import threading
-import time
-from pathlib import Path
+from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
-    ConversationItemAddedEvent,
     JobContext,
     JobProcess,
+    ModelSettings,
     cli,
     inference,
     room_io,
 )
-from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+from transcript_recording import (
+    StreamingTranscriptWriter,
+    attach_streaming_transcript,
+    transcript_file_path,
+)
 
 logger = logging.getLogger("agent")
 
@@ -29,13 +31,29 @@ AGENT_MODEL = "openai/gpt-5.2-chat-latest"
 
 
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, *, transcript: StreamingTranscriptWriter | None = None) -> None:
         super().__init__(
             instructions="""You are a helpful voice AI assistant. The user is interacting with you via voice, even if you perceive the conversation as text.
             You eagerly assist users with their questions by providing information from your extensive knowledge.
             Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
             You are curious, friendly, and have a sense of humor.""",
         )
+        self._transcript = transcript
+
+    async def transcription_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[str]:
+        """Passthrough transcription plus incremental transcript file writes."""
+        if self._transcript is None:
+            async for delta in Agent.default.transcription_node(
+                self, text, model_settings
+            ):
+                yield delta
+            return
+
+        async for delta in Agent.default.transcription_node(self, text, model_settings):
+            self._transcript.append_assistant_delta(delta)
+            yield delta
 
     # To add tools, use the @function_tool decorator.
     # Here's an example that adds a simple weather tool.
@@ -65,53 +83,6 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
-def _safe_filename_part(value: str, max_len: int = 96) -> str:
-    cleaned = re.sub(r"[^\w.\-]+", "_", value.strip() or "x", flags=re.ASCII)
-    return (cleaned[:max_len] if cleaned else "x").strip("_") or "x"
-
-
-def _transcript_file_path(ctx: JobContext) -> Path:
-    base_dir = os.environ.get("TRANSCRIPT_DIR", "transcripts").strip()
-    root = Path(base_dir).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
-    room_part = _safe_filename_part(ctx.room.name or "room")
-    job_part = _safe_filename_part(str(ctx.job.id))
-    ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
-    return root / f"{room_part}_{job_part}_{ts}.txt"
-
-
-def _attach_transcript_file(session: AgentSession, ctx: JobContext, path: Path) -> None:
-    lock = threading.Lock()
-    with path.open("w", encoding="utf-8") as f:
-        f.write(
-            "# Session transcript\n"
-            f"# room={ctx.room.name!r}\n"
-            f"# job_id={ctx.job.id!r}\n"
-            f"# started_utc={time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}\n\n"
-        )
-
-    def on_conversation_item(ev: ConversationItemAddedEvent) -> None:
-        item = ev.item
-        if not isinstance(item, ChatMessage):
-            return
-        if item.role not in ("user", "assistant"):
-            return
-        text = (item.text_content or "").strip()
-        if not text:
-            return
-        if item.role == "user":
-            block = f"You:\n{text}\n\n"
-        else:
-            suffix = " (interrupted)" if item.interrupted else ""
-            block = f"Assistant:{suffix}\n{text}\n\n"
-        with lock:
-            with path.open("a", encoding="utf-8") as out:
-                out.write(block)
-
-    session.on("conversation_item_added", on_conversation_item)
-    logger.info("Writing transcript to %s", path.resolve())
-
-
 @server.rtc_session(agent_name="lyratalk")
 async def my_agent(ctx: JobContext):
     # Logging setup
@@ -119,6 +90,8 @@ async def my_agent(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+
+    transcript_writer: StreamingTranscriptWriter | None = None
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
@@ -147,8 +120,8 @@ async def my_agent(ctx: JobContext):
         "true",
         "yes",
     ):
-        transcript_path = _transcript_file_path(ctx)
-        _attach_transcript_file(session, ctx, transcript_path)
+        transcript_writer = StreamingTranscriptWriter(transcript_file_path(ctx))
+        attach_streaming_transcript(session, ctx, transcript_writer)
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
     # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
@@ -170,7 +143,7 @@ async def my_agent(ctx: JobContext):
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=Assistant(transcript=transcript_writer),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
