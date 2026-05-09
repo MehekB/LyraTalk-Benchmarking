@@ -1,4 +1,14 @@
-"""Session transcript file recording (streaming STT + streaming assistant text)."""
+"""Session transcript file recording (streaming STT + streaming assistant text).
+
+STT "first text" latency (``stt_first_text_latency``) is measured as *wall time* from when the
+session reports the user as *speaking* (``user_state_changed`` → ``speaking``) until the first
+non-empty ``user_input_transcribed`` event for that utterance. That approximates
+*speech detected → first transcript characters*, not the raw HTTP/WebSocket handshake inside the
+STT provider (those internals are not exposed here).
+
+For **P50/P90/P95** or RTF-style summaries, run many sessions or utterances and aggregate the
+``stt_first_text_latency`` lines (or export samples to CSV in a separate benchmark harness).
+"""
 
 from __future__ import annotations
 
@@ -18,6 +28,7 @@ from livekit.agents import (
     ConversationItemAddedEvent,
     JobContext,
     UserInputTranscribedEvent,
+    UserStateChangedEvent,
 )
 from livekit.agents.llm import ChatMessage
 
@@ -30,6 +41,27 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _sequence_lock = threading.Lock()
+
+
+def _fmt_seconds_as_ms(seconds: float) -> str:
+    return f"{seconds * 1000.0:.1f}ms"
+
+
+def _assistant_latency_lines(item: ChatMessage) -> str | None:
+    """Format e2e, LLM TTFT, TTS TTFB from LiveKit MetricsReport (assistant turns only)."""
+    m = item.metrics
+    if not m:
+        return None
+    parts: list[str] = []
+    if m.get("e2e_latency") is not None:
+        parts.append(f"e2e_latency={_fmt_seconds_as_ms(m['e2e_latency'])}")
+    if m.get("llm_node_ttft") is not None:
+        parts.append(f"llm_ttft={_fmt_seconds_as_ms(m['llm_node_ttft'])}")
+    if m.get("tts_node_ttfb") is not None:
+        parts.append(f"tts_ttfb={_fmt_seconds_as_ms(m['tts_node_ttfb'])}")
+    if not parts:
+        return None
+    return "Latencies: " + ", ".join(parts) + "\n\n"
 
 
 def _max_numeric_transcript_stem(root: Path) -> int:
@@ -96,6 +128,14 @@ class StreamingTranscriptWriter:
         self._user_turn_byte_offset: int | None = None
         self._last_final_user_text: str | None = None
         self._assistant_stream_started = False
+        # STT: first non-empty transcript after VAD reports "speaking" (see module docstring).
+        self._speech_start_mono: float | None = None
+        self._stt_first_chunk_latency_sec: float | None = None
+
+    def on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
+        if ev.new_state == "speaking":
+            self._speech_start_mono = time.perf_counter()
+            self._stt_first_chunk_latency_sec = None
 
     def append_assistant_delta(self, delta: str) -> None:
         """Append one transcription chunk while the LLM stream / transcription pipeline runs."""
@@ -115,10 +155,20 @@ class StreamingTranscriptWriter:
             if ev.is_final:
                 self._last_final_user_text = None
                 self._user_turn_byte_offset = None
+                self._speech_start_mono = None
+                self._stt_first_chunk_latency_sec = None
             return
 
         chunk = ev.transcript.encode()
         final_nl = b"\n\n"
+
+        if (
+            self._speech_start_mono is not None
+            and self._stt_first_chunk_latency_sec is None
+        ):
+            self._stt_first_chunk_latency_sec = max(
+                0.0, time.perf_counter() - self._speech_start_mono
+            )
 
         with self.lock, self.path.open("rb+") as f:
             if self._user_turn_byte_offset is None:
@@ -134,8 +184,17 @@ class StreamingTranscriptWriter:
             f.write(chunk)
             if ev.is_final:
                 f.write(final_nl)
+                if self._stt_first_chunk_latency_sec is not None:
+                    stt_line = (
+                        "stt_first_text_latency="
+                        f"{_fmt_seconds_as_ms(self._stt_first_chunk_latency_sec)} "
+                        "(user speaking → first transcript chunk)\n\n"
+                    )
+                    f.write(stt_line.encode("utf-8"))
                 self._user_turn_byte_offset = None
                 self._last_final_user_text = stripped
+                self._speech_start_mono = None
+                self._stt_first_chunk_latency_sec = None
 
     def on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         item = ev.item
@@ -163,17 +222,22 @@ class StreamingTranscriptWriter:
         if self._assistant_stream_started:
             suffix = " (interrupted)" if interrupted else ""
             tail = f"{suffix}\n\n".encode()
+            lat = _assistant_latency_lines(item)
+            out = tail + (lat.encode("utf-8") if lat else b"")
             with self.lock, self.path.open("ab") as f:
-                f.write(tail)
+                f.write(out)
             self._assistant_stream_started = False
             return
 
         if not text:
             return
         suffix = " (interrupted)" if interrupted else ""
-        block = f"Assistant:{suffix}\n\n{text}\n\n".encode()
+        block = f"Assistant:{suffix}\n\n{text}\n\n"
+        lat = _assistant_latency_lines(item)
+        if lat:
+            block += lat
         with self.lock, self.path.open("ab") as f:
-            f.write(block)
+            f.write(block.encode("utf-8"))
 
 
 def attach_streaming_transcript(
@@ -183,11 +247,14 @@ def attach_streaming_transcript(
         "# Session transcript\n"
         f"# room={ctx.room.name!r}\n"
         f"# job_id={ctx.job.id!r}\n"
-        f"# started_utc={time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}\n\n"
+        f"# started_utc={time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}\n"
+        "# After each user turn (streaming STT): stt_first_text_latency (speech→first chunk).\n"
+        "# After each assistant turn: Latencies: e2e_latency, llm_ttft, tts_ttfb (LiveKit MetricsReport).\n\n"
     ).encode()
     with writer.path.open("wb") as f:
         f.write(header)
 
+    session.on("user_state_changed", writer.on_user_state_changed)
     session.on("user_input_transcribed", writer.on_user_input_transcribed)
     session.on(
         "conversation_item_added",
