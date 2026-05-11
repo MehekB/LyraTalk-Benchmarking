@@ -64,7 +64,12 @@ export default function BenchmarkPage({ onNavigate }) {
           <h2 style={{ marginBottom: '1rem' }}>Benchmark runs</h2>
           <BenchmarkRunsTable
             runs={runs}
-            onViewResults={() => onNavigate('dashboard')}
+            onViewResults={(run) =>
+              onNavigate({
+                page: 'dashboard',
+                runId: run.id,
+              })
+            }
           />
         </div>
       </div>
