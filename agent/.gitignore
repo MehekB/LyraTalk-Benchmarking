@@ -14,6 +14,7 @@ KMS
 # Local session transcripts (see TRANSCRIPT_DIR in agent)
 transcripts/
 
+
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/
