@@ -1,0 +1,16 @@
+{
+  "name": "lyratalk-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node index.mjs",
+    "db:test": "node scripts/test-db.mjs",
+    "db:schema": "node scripts/apply-schema.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

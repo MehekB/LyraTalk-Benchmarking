@@ -9,12 +9,12 @@
 //   useAppDispatch — dispatch actions anywhere
 // ─────────────────────────────────────────────────────────────────────────────
 import { createContext, useContext, useReducer } from 'react';
-import { INITIAL_PROVIDERS, INITIAL_RUNS } from '../data/constants';
+import { INITIAL_RUNS } from '../data/constants';
 
 // ── Initial state ──────────────────────────────────────────────────────────
 const initialState = {
-  providers: INITIAL_PROVIDERS,
-  nextProviderId: 5,
+  providers: [],
+  nextProviderId: 1,
   runs: INITIAL_RUNS,
   nextRunId: 5,
 };
@@ -23,7 +23,17 @@ const initialState = {
 function reducer(state, action) {
   switch (action.type) {
 
-    // Providers
+    // Providers (list is loaded from GET /api/providers on ProvidersPage)
+    case 'SET_PROVIDERS':
+      return {
+        ...state,
+        providers: action.payload,
+        nextProviderId:
+          action.payload.length === 0
+            ? 1
+            : Math.max(...action.payload.map((p) => p.id)) + 1,
+      };
+
     case 'ADD_PROVIDER':
       return {
         ...state,
