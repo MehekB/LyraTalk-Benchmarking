@@ -4,14 +4,24 @@
 // the providers registered for benchmarking.
 //
 // State owned here: currentFilter, modalState (open/provider being edited).
-// Provider CRUD is dispatched to global state via useAppDispatch.
+// Provider list is loaded from GET /api/providers; writes use POST/PUT/DELETE then refetch.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAppState, useAppDispatch } from '../hooks/useAppState';
 import ProviderModal from '../components/ProviderModal';
 import TypeBadge    from '../components/ui/TypeBadge';
+import { apiFetch } from '../lib/api';
 
 const FILTER_OPTIONS = ['all', 'stt', 'llm', 'tts'];
+
+async function fetchProvidersList() {
+  const res = await apiFetch('/api/providers');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || res.statusText || 'Failed to load providers');
+  }
+  return Array.isArray(data) ? data : [];
+}
 
 export default function ProvidersPage() {
   const { providers }  = useAppState();
@@ -23,6 +33,25 @@ export default function ProvidersPage() {
   // null = modal closed; undefined = add mode; Provider object = edit mode
   const [editingProvider, setEditingProvider] = useState(null);
   const [modalOpen,       setModalOpen]       = useState(false);
+  const [loading,         setLoading]         = useState(true);
+  const [loadError,       setLoadError]       = useState('');
+
+  const reloadProviders = useCallback(async () => {
+    setLoadError('');
+    try {
+      const list = await fetchProvidersList();
+      dispatch({ type: 'SET_PROVIDERS', payload: list });
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Failed to load providers');
+      dispatch({ type: 'SET_PROVIDERS', payload: [] });
+    } finally {
+      setLoading(false);
+    }
+  }, [dispatch]);
+
+  useEffect(() => {
+    reloadProviders();
+  }, [reloadProviders]);
 
   // ── Derived ──────────────────────────────────────────────────────────────
   const visible = filter === 'all'
@@ -34,17 +63,25 @@ export default function ProvidersPage() {
   const openEdit = (p) => { setEditingProvider(p);    setModalOpen(true); };
   const closeModal = () => setModalOpen(false);
 
-  const handleSave = (data) => {
-    if (data.id !== undefined) {
-      dispatch({ type: 'EDIT_PROVIDER', payload: data });
-    } else {
-      dispatch({ type: 'ADD_PROVIDER', payload: data });
-    }
+  const handleSave = async () => {
+    await reloadProviders();
     closeModal();
   };
 
-  const handleDelete = (id) => {
-    dispatch({ type: 'DELETE_PROVIDER', payload: id });
+  const handleDelete = async (id) => {
+    if (!window.confirm('Remove this provider from the database?')) return;
+    try {
+      const res = await apiFetch(`/api/providers/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || res.statusText);
+      }
+      await reloadProviders();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Delete failed');
+    }
   };
 
   return (
@@ -74,6 +111,11 @@ export default function ProvidersPage() {
 
       {/* ── Table ── */}
       <div className="table-wrap">
+        {loadError ? (
+          <p className="empty" role="alert" style={{ padding: '1rem', color: '#c62828' }}>
+            {loadError} — Start the API (<code>cd server && npm run dev</code>), restart Vite after editing <code>vite.config.js</code>, or set <code>VITE_API_ORIGIN=http://127.0.0.1:3001</code> in <code>client/.env</code>.
+          </p>
+        ) : null}
         <table>
           <thead>
             <tr>
@@ -84,7 +126,11 @@ export default function ProvidersPage() {
             </tr>
           </thead>
           <tbody>
-            {visible.length === 0 ? (
+            {loading ? (
+              <tr>
+                <td colSpan={4} className="empty">Loading providers…</td>
+              </tr>
+            ) : visible.length === 0 ? (
               <tr>
                 <td colSpan={4} className="empty">No providers found.</td>
               </tr>

@@ -1,16 +1,12 @@
-"""Per-session metrics written as **one JSON object per completed run**, appended to a single file.
+"""Per-session metrics persisted when a run ends.
 
-Each time a session ends (close, job shutdown, or process exit), one compact JSON line is
-appended to ``RUN_METRICS_DIR`` / ``RUN_METRICS_AGGREGATE_FILE`` (default ``run_metrics/metrics.ndjson``).
-That file is **newline-delimited JSON** (NDJSON): each line is a full run document (same shape as
-before when each run had its own ``.json`` file).
+On flush, metrics are **POSTed** to the benchmark API (``BENCHMARK_API_URL`` or
+``BENCHMARK_API_BASE`` + ``/api/benchmark-runs``), which inserts ``benchmark_runs`` /
+``benchmark_turns`` in Postgres. Provider foreign keys are resolved server-side from
+``providers.model`` (e.g. ``deepgram/nova-3``).
 
-Parse with::
-
-    import json
-    with open("run_metrics/metrics.ndjson") as f:
-        for line in f:
-            run = json.loads(line)
+Optionally, the same payload is appended as one NDJSON line under ``RUN_METRICS_DIR`` when
+``RUN_METRICS_NDJSON`` is enabled (default ``metrics.ndjson`` path unchanged).
 """
 
 from __future__ import annotations
@@ -21,7 +17,10 @@ import logging
 import os
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +56,88 @@ def _ms_from_seconds(value: float | None) -> float | None:
     if value is None:
         return None
     return round(value * 1000.0, 3)
+
+
+def _benchmark_api_url() -> str:
+    explicit = os.environ.get("BENCHMARK_API_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    base = os.environ.get("BENCHMARK_API_BASE", "http://127.0.0.1:3001").strip()
+    return f"{base.rstrip('/')}/api/benchmark-runs"
+
+
+def _api_enabled() -> bool:
+    v = os.environ.get("BENCHMARK_API_DISABLE", "").strip().lower()
+    return v not in ("1", "true", "yes")
+
+
+def _ndjson_enabled() -> bool:
+    v = os.environ.get("RUN_METRICS_NDJSON", "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
+def _turns_for_api(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Turns with all latency fields set (required by benchmark_turns NOT NULL)."""
+    out: list[dict[str, Any]] = []
+    for t in turns:
+        stt = t.get("stt_latency_ms")
+        llm = t.get("llm_latency_ms")
+        tts = t.get("tts_latency_ms")
+        e2e = t.get("e2e_latency_ms")
+        if stt is None or llm is None or tts is None or e2e is None:
+            continue
+        out.append(
+            {
+                "turn_number": t.get("turn", len(out) + 1),
+                "stt_latency_ms": stt,
+                "llm_latency_ms": llm,
+                "tts_latency_ms": tts,
+                "e2e_latency_ms": e2e,
+            }
+        )
+    return out
+
+
+def post_benchmark_run(
+    *,
+    stt_model: str,
+    llm_model: str,
+    tts_model: str,
+    turns: list[dict[str, Any]],
+    recorded_at: datetime | None = None,
+    api_url: str | None = None,
+    timeout_sec: float = 15.0,
+) -> dict[str, Any]:
+    """POST one completed run to the server; returns parsed JSON body."""
+    complete = _turns_for_api(turns)
+    if not complete:
+        raise ValueError("No turns with complete latency metrics to persist")
+
+    when = recorded_at or datetime.now(timezone.utc)
+    body = {
+        "recorded_at": when.isoformat(),
+        "stt_model": stt_model,
+        "llm_model": llm_model,
+        "tts_model": tts_model,
+        "turns": complete,
+    }
+    url = (api_url or _benchmark_api_url()).rstrip("/")
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Benchmark API {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Benchmark API unreachable at {url}: {e.reason}") from e
 
 
 def aggregate_metrics_path() -> Path:
@@ -161,11 +242,38 @@ class RunMetricsRecorder:
             if self._written:
                 return
             payload = self._payload_locked()
-            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
-            with self._path.open("ab") as f:
-                f.write(line.encode("utf-8"))
+            m = self._models
+            persisted = False
+            if _api_enabled():
+                try:
+                    result = post_benchmark_run(
+                        stt_model=m.stt_model_id,
+                        llm_model=m.llm_model_id,
+                        tts_model=m.tts_model_id,
+                        turns=payload["turns"],
+                    )
+                    persisted = True
+                    logger.info(
+                        "Persisted benchmark run to Postgres (id=%s)",
+                        result.get("id"),
+                    )
+                except (ValueError, RuntimeError) as e:
+                    logger.warning("Benchmark API POST failed: %s", e)
+            if _ndjson_enabled():
+                line = (
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                    + "\n"
+                )
+                with self._path.open("ab") as f:
+                    f.write(line.encode("utf-8"))
+                persisted = True
+                logger.info("Appended run metrics (one line) to %s", self._path.resolve())
+            if not persisted:
+                logger.warning(
+                    "Run metrics not persisted (enable API or RUN_METRICS_NDJSON=1)"
+                )
+                return
             self._written = True
-        logger.info("Appended run metrics (one line) to %s", self._path.resolve())
 
     def _atexit_flush(self) -> None:
         if not self._written:
@@ -233,8 +341,13 @@ def attach_run_metrics_recording(
 
     ctx.add_shutdown_callback(_on_shutdown)
 
+    targets = []
+    if _api_enabled():
+        targets.append(_benchmark_api_url())
+    if _ndjson_enabled():
+        targets.append(str(path.resolve()))
     logger.info(
-        "Run metrics will append to %s (run_id=%s)",
-        path.resolve(),
+        "Run metrics on flush → %s (run_id=%s)",
+        ", ".join(targets) if targets else "disabled",
         run_id,
     )

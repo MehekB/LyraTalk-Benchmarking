@@ -7,11 +7,30 @@
 //
 // Props:
 //   provider  — Provider object | null
-//   onSave    — ({ name, type, model, id? }) => void
+//   onSave    — ({ name, type, model, id }) => void  (after successful POST/PUT to API)
 //   onClose   — () => void
 
 import { useState } from 'react';
 import Modal from './ui/Modal';
+import { apiFetch } from '../lib/api';
+
+async function saveProviderToApi({ isEdit, provider, name, type, model }) {
+  const body = JSON.stringify({ name, type, model });
+  const path = isEdit
+    ? `/api/providers/${encodeURIComponent(provider.id)}`
+    : '/api/providers';
+  const res = await apiFetch(path, {
+    method: isEdit ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data.error || res.statusText || 'Request failed';
+    throw new Error(msg);
+  }
+  return data;
+}
 
 export default function ProviderModal({ provider, onSave, onClose }) {
   const isEdit = Boolean(provider);
@@ -20,16 +39,40 @@ export default function ProviderModal({ provider, onSave, onClose }) {
   const [name,  setName]  = useState(provider?.name  ?? '');
   const [type,  setType]  = useState(provider?.type  ?? 'llm');
   const [model, setModel] = useState(provider?.model ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError]  = useState('');
 
-  const handleSave = () => {
-    if (!name.trim() || !model.trim()) return; // basic validation
-    onSave({ id: provider?.id, name: name.trim(), type, model: model.trim() });
+  const handleSave = async () => {
+    if (!name.trim() || !model.trim()) return;
+    setError('');
+    setSaving(true);
+    try {
+      const row = await saveProviderToApi({
+        isEdit,
+        provider,
+        name: name.trim(),
+        type,
+        model: model.trim(),
+      });
+      onSave({
+        id: Number(row.id),
+        name: row.name,
+        type: row.type,
+        model: row.model,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const footer = (
     <>
-      <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-      <button className="btn btn-solid" onClick={handleSave}>Save</button>
+      <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
+      <button className="btn btn-solid" onClick={handleSave} disabled={saving}>
+        {saving ? 'Saving…' : 'Save'}
+      </button>
     </>
   );
 
@@ -65,6 +108,11 @@ export default function ProviderModal({ provider, onSave, onClose }) {
           onChange={e => setModel(e.target.value)}
         />
       </div>
+      {error ? (
+        <p className="modal-error" role="alert" style={{ color: '#c62828', marginTop: '0.75rem', fontSize: '0.9rem' }}>
+          {error}
+        </p>
+      ) : null}
     </Modal>
   );
 }

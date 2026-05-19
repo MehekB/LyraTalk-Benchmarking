@@ -1,48 +1,20 @@
 // pages/BenchmarkPage.jsx
-// ─────────────────────────────────────────────────────────────────────────────
-// The Benchmark page. Left panel: run configuration form.
-// Right panel: table of all past and current runs.
-//
-// Delegates:
-//   - Form UI           → BenchmarkRunForm
-//   - Runs table        → BenchmarkRunsTable
-//   - Run simulation    → useBenchmarkRunner hook
-//   - State             → global via useAppState
-// ─────────────────────────────────────────────────────────────────────────────
 import { useState } from 'react';
-import { useAppState }          from '../hooks/useAppState';
-import { useBenchmarkRunner }   from '../hooks/useBenchmarkRunner';
-import BenchmarkRunForm         from '../components/BenchmarkRunForm';
-import BenchmarkRunsTable       from '../components/BenchmarkRunsTable';
+import { useBenchmarkRunner } from '../hooks/useBenchmarkRunner';
+import { useBenchmarkRuns } from '../hooks/useBenchmarkRuns';
+import BenchmarkRunForm from '../components/BenchmarkRunForm';
+import BenchmarkRunsTable from '../components/BenchmarkRunsTable';
 
 export default function BenchmarkPage({ onNavigate }) {
-  const { runs }   = useAppState();
+  const { runs, loading, error, reload } = useBenchmarkRuns();
   const { startRun } = useBenchmarkRunner();
-
-  // Track whether any run is actively in progress (disables the Run button)
   const [running, setRunning] = useState(false);
 
   const handleSubmit = (config) => {
     setRunning(true);
-
-    // Start the run — the hook drives progress via setInterval.
-    // We poll runs[] to detect completion and re-enable the button.
     startRun(config);
-
-    // Poll until the newest run finishes
-    // In production: React Query would handle this via refetchInterval
-    const poll = setInterval(() => {
-      setRunning(prev => {
-        // Check by reading from the store isn't possible here since this
-        // closure captures stale state — the hook's dispatch drives UI.
-        // Simple approach: wait 8 seconds (covers ~350ms × 24 ticks max)
-        return prev;
-      });
-    }, 100);
-
     setTimeout(() => {
-      setRunning(false);
-      clearInterval(poll);
+      reload().finally(() => setRunning(false));
     }, 8500);
   };
 
@@ -55,17 +27,25 @@ export default function BenchmarkPage({ onNavigate }) {
         </div>
       </div>
 
+      {error && (
+        <p style={styles.error}>
+          {error} — Start the API (<code>cd server && npm run dev</code>) and ensure runs exist in the DB.
+        </p>
+      )}
+
       <div className="bench-layout">
-        {/* Left: config form */}
         <BenchmarkRunForm onSubmit={handleSubmit} running={running} />
 
-        {/* Right: runs table */}
         <div>
           <h2 style={{ marginBottom: '1rem' }}>Benchmark runs</h2>
-          <BenchmarkRunsTable
-            runs={runs}
-            onViewResults={() => onNavigate('dashboard')}
-          />
+          {loading ? (
+            <div className="empty">Loading runs…</div>
+          ) : (
+            <BenchmarkRunsTable
+              runs={runs.filter((r) => r.turns?.length)}
+              onViewResults={(run) => onNavigate({ page: 'dashboard', runId: run.id })}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -74,4 +54,5 @@ export default function BenchmarkPage({ onNavigate }) {
 
 const styles = {
   page: { padding: '2rem', maxWidth: 1100 },
+  error: { color: '#b42318', fontSize: 13, marginBottom: '1rem' },
 };

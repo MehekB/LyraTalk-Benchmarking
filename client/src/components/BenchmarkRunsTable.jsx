@@ -23,10 +23,9 @@ export default function BenchmarkRunsTable({ runs, onViewResults }) {
       <table>
         <thead>
           <tr>
-            <th>Provider / Model</th>
-            <th>Type</th>
+            <th>Provider Pipeline</th>
             <th>Dataset</th>
-            <th>Iter.</th>
+            <th>Turns</th>
             <th>Status</th>
             <th>Actions</th>
           </tr>
@@ -35,18 +34,22 @@ export default function BenchmarkRunsTable({ runs, onViewResults }) {
           {runs.map(run => (
             <tr key={run.id}>
               <td className="primary">
-                {run.provider}
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                  {run.model}
+                <div style={{ fontSize: 11, marginTop: 2 }}>
+                  <div>STT: {run.stt_model}</div>
+                  <div>LLM: {run.llm_model}</div>
+                  <div>TTS: {run.tts_model}</div>
                 </div>
+
                 {run.status === 'running' && (
-                  <div className="progress-wrap">
-                    <div className="progress-bar" style={{ width: `${run.progress}%` }} />
+                  <div className="progress-wrap" style={{ marginTop: 8 }}>
+                    <div
+                      className="progress-bar"
+                      style={{ width: `${run.progress}%` }}
+                    />
                   </div>
                 )}
               </td>
-              <td><TypeBadge type={run.type} /></td>
-              <td>{run.dataset}</td>
+              <td>{run.dataset ?? '—'}</td>
               <td>{run.iterations}</td>
               <td><StatusBadge status={run.status} /></td>
               <td>

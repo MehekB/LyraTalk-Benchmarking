@@ -23,8 +23,16 @@ LIVEKIT_API_KEY="API7d4ffGAy6xLQ"
 LIVEKIT_API_SECRET="xSSa1Ko2nvjYIlOtIikgPFVLH0L0wQOW1JG2St98ovE"
 LIVEKIT_URL="wss://lyratalk-5x60wac9.livekit.cloud"
 --------------------------------------
-
 Running the code pick one of the below:
+
+start up server to post data to postgres
+
+  npm install
+  cd server 
+  npm run dev
+
+  Leave that terminal open http://127.0.0.1:3001
+
 
 Talk in the terminal (ive only tried this one)
 uv run python src/agent.py console

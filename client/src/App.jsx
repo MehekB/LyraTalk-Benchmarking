@@ -20,14 +20,30 @@ const PAGES = {
 };
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState('providers');
-  const PageComponent = PAGES[currentPage];
+  const [currentPage, setCurrentPage] = useState({
+    page: 'providers',
+    runId: null,
+  });
+  const [pageProps, setPageProps] = useState({});
+  const PageComponent = PAGES[currentPage.page];
+  const handleNavigate = (page, props = {}) => {
+    setCurrentPage(page);
+    setPageProps(props);
+  };
 
   return (
-    // AppProvider makes global state (providers, runs) available everywhere
     <AppProvider>
-      <TopNav currentPage={currentPage} onNavigate={setCurrentPage} />
-      <PageComponent onNavigate={setCurrentPage} />
+      <TopNav
+        currentPage={currentPage.page}
+        onNavigate={(page) =>
+          setCurrentPage({ page, runId: null })
+        }
+      />
+
+      <PageComponent
+        onNavigate={setCurrentPage}
+        runId={currentPage.runId}
+      />
     </AppProvider>
   );
 }
