@@ -46,6 +46,60 @@ function normalizeTurn(raw, index) {
 export default function benchmarkRunsRouter(pool) {
   const router = Router();
 
+  router.get("/", async (_req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT
+           br.id,
+           br.recorded_at,
+           ps.name AS stt_provider_name,
+           ps.model AS stt_model,
+           pl.name AS llm_provider_name,
+           pl.model AS llm_model,
+           pt.name AS tts_provider_name,
+           pt.model AS tts_model,
+           COALESCE(
+             json_agg(
+               json_build_object(
+                 'turn_number', bt.turn_number,
+                 'stt_latency_ms', bt.stt_latency_ms,
+                 'llm_latency_ms', bt.llm_latency_ms,
+                 'tts_latency_ms', bt.tts_latency_ms,
+                 'e2e_latency_ms', bt.e2e_latency_ms
+               )
+               ORDER BY bt.turn_number
+             ) FILTER (WHERE bt.turn_number IS NOT NULL),
+             '[]'::json
+           ) AS turns
+         FROM benchmark_runs br
+         JOIN providers ps ON ps.id = br.stt_provider_id
+         JOIN providers pl ON pl.id = br.llm_provider_id
+         JOIN providers pt ON pt.id = br.tts_provider_id
+         LEFT JOIN benchmark_turns bt ON bt.run_id = br.id
+         GROUP BY
+           br.id, br.recorded_at,
+           ps.name, ps.model, pl.name, pl.model, pt.name, pt.model
+         ORDER BY br.recorded_at ASC`
+      );
+      return res.json(
+        rows.map((r) => ({
+          id: Number(r.id),
+          recorded_at: r.recorded_at,
+          stt_provider_name: r.stt_provider_name,
+          stt_model: r.stt_model,
+          llm_provider_name: r.llm_provider_name,
+          llm_model: r.llm_model,
+          tts_provider_name: r.tts_provider_name,
+          tts_model: r.tts_model,
+          turns: Array.isArray(r.turns) ? r.turns : [],
+        }))
+      );
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Failed to list benchmark runs" });
+    }
+  });
+
   router.post("/", async (req, res) => {
     const body = req.body ?? {};
     const { recorded_at, turns: rawTurns } = body;

@@ -9,14 +9,12 @@
 //   useAppDispatch — dispatch actions anywhere
 // ─────────────────────────────────────────────────────────────────────────────
 import { createContext, useContext, useReducer } from 'react';
-import { INITIAL_RUNS } from '../data/constants';
-
 // ── Initial state ──────────────────────────────────────────────────────────
 const initialState = {
   providers: [],
   nextProviderId: 1,
-  runs: INITIAL_RUNS,
-  nextRunId: 5,
+  runs: [],
+  nextRunId: 1,
 };
 
 // ── Reducer ────────────────────────────────────────────────────────────────
@@ -53,6 +51,16 @@ function reducer(state, action) {
       return {
         ...state,
         providers: state.providers.filter(p => p.id !== action.payload),
+      };
+
+    case 'SET_RUNS':
+      return {
+        ...state,
+        runs: action.payload,
+        nextRunId:
+          action.payload.length === 0
+            ? 1
+            : Math.max(...action.payload.map((r) => r.id)) + 1,
       };
 
     // Benchmark runs

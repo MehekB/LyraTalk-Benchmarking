@@ -49,7 +49,7 @@ export default function BenchmarkRunsTable({ runs, onViewResults }) {
                   </div>
                 )}
               </td>
-              <td>{run.dataset}</td>
+              <td>{run.dataset ?? '—'}</td>
               <td>{run.iterations}</td>
               <td><StatusBadge status={run.status} /></td>
               <td>

@@ -11,24 +11,23 @@
 //   • Full results table at the bottom
 // ─────────────────────────────────────────────────────────────────────────────
 import { useState } from 'react';
-import { useAppState } from '../hooks/useAppState';
-import { PROVIDERS_BY_TYPE } from '../data/constants';
+import { useBenchmarkRuns } from '../hooks/useBenchmarkRuns';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-const ms2s = ms => (ms / 1000).toFixed(2) + 's';
-const fmt  = ms => (ms / 1000).toFixed(2) + 's';
+const ms2s = ms => (ms == null ? '—' : (ms / 1000).toFixed(2) + 's');
+const fmt  = ms => (ms == null ? '—' : (ms / 1000).toFixed(2) + 's');
 
-const getProviderName = (type, model) => {
-  return (
-    PROVIDERS_BY_TYPE[type]?.find(p => p.model === model)?.name || model
-  );
+const providerLabel = (name, model) => {
+  if (name) return name;
+  if (!model) return '—';
+  return model.includes('/') ? model.split('/')[1] : model;
 };
 
 export default function DashboardPage({ runId }) {
-  const { runs }   = useAppState();
+  const { runs, loading, error } = useBenchmarkRuns();
   const [tab, setTab] = useState('results');
 
-  const completed = runs.filter(r => r.status === 'completed' && r.turns);
+  const completed = runs.filter(r => r.status === 'completed' && r.turns?.length);
 
   // If runId is provided, show that run; otherwise latest
   const latest = runId
@@ -58,8 +57,22 @@ export default function DashboardPage({ runId }) {
     value: r.avg_e2e_ms,
   }));
 
+  if (loading) {
+    return (
+      <div style={S.page}>
+        <div className="empty" style={{ marginTop: '2rem' }}>Loading runs…</div>
+      </div>
+    );
+  }
+
   return (
     <div style={S.page}>
+
+      {error && (
+        <p style={{ color: '#b42318', fontSize: 13, marginBottom: '1rem' }}>
+          {error} — Start the API (<code>cd server && npm run dev</code>).
+        </p>
+      )}
 
       {/* ── Page header ── */}
       <div style={S.pageHeader}>
@@ -84,6 +97,12 @@ export default function DashboardPage({ runId }) {
 
       {tab === 'results' && (
         <>
+          {!latest && !error && (
+            <div className="empty" style={{ marginBottom: '1.5rem' }}>
+              No benchmark runs in the database yet.
+            </div>
+          )}
+
           {/* ── Latest run banner ── */}
           {latest && (
             <div style={S.latestBanner}>
@@ -91,22 +110,22 @@ export default function DashboardPage({ runId }) {
                 <span style={S.latestLabel}>LATEST RUN</span>
                 <ProviderPill
                   type="stt"
-                  label={getProviderName('stt', latest.stt_model)}
+                  label={providerLabel(latest.stt_provider, latest.stt_model)}
                 />
                 <span style={S.dot}>·</span>
                 <ProviderPill
                   type="llm"
-                  label={getProviderName('llm', latest.llm_model)}
+                  label={providerLabel(latest.llm_provider, latest.llm_model)}
                 />
                 <span style={S.dot}>·</span>
                 <ProviderPill
                   type="tts"
-                  label={getProviderName('tts', latest.tts_model)}
+                  label={providerLabel(latest.tts_provider, latest.tts_model)}
                 />
               </div>
               <button style={S.exportBtn}>
                 <div style={S.exportTop}>Export Results</div>
-                <div style={S.exportSub}>{latest.started_at?.split(' ')[0] ?? 'May 10, 2026'}</div>
+                <div style={S.exportSub}>{latest.started_at?.split(' ')[0] ?? '—'}</div>
               </button>
             </div>
           )}
@@ -136,8 +155,8 @@ export default function DashboardPage({ runId }) {
               />
               <KpiCard
                 label="COST PER RUN"
-                value={`$${kpis.cost.toFixed(3)}`}
-                sub={`~$${(kpis.cost * 1000).toFixed(2)} / 1K runs`}
+                value="—"
+                sub={<span style={S.targetText}>No data yet</span>}
               />
               <KpiCard
                 label="TOOL CALL ACCURACY"
@@ -334,14 +353,16 @@ function ABComparison({ runs }) {
         ))}
         {/* Metric rows */}
         {metrics.map(m => {
-          const vals = runs.map(r => r[m.key]);
-          const best = Math.min(...vals.filter(Boolean));
+          const vals = runs.map(r => r[m.key]).filter(v => v != null);
+          const best = vals.length ? Math.min(...vals) : null;
           return [
             <div key={`lbl-${m.key}`} style={S.abLabel}>{m.label}</div>,
             ...runs.map((r, i) => {
               const v   = r[m.key];
-              const isBest = v !== null && v === best;
-              const display = m.fmt ? m.fmt(v) : ms2s(v);
+              const isBest = v != null && best != null && v === best;
+              const display = v == null
+                ? '—'
+                : (m.fmt ? m.fmt(v) : ms2s(v));
               return (
                 <div key={`${m.key}-${i}`} style={{ ...S.abCell, ...(isBest ? S.abBest : {}) }}>
                   {display}
