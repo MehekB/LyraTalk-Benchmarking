@@ -7,7 +7,13 @@
 npm install
 npm run dev
 ```
-
+start the server
+* move into 'server' folder 
+'''
+npm install
+npm run dev
+'''
+server runs on like 127.0.0.01 or smth
 
 ## Benchmark run setup
 
