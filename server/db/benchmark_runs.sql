@@ -3,6 +3,10 @@ CREATE TABLE IF NOT EXISTS benchmark_runs (
   stt_provider_id  BIGINT      NOT NULL REFERENCES providers (id) ON DELETE RESTRICT,
   llm_provider_id  BIGINT      NOT NULL REFERENCES providers (id) ON DELETE RESTRICT,
   tts_provider_id  BIGINT      NOT NULL REFERENCES providers (id) ON DELETE RESTRICT,
+  stt_audio_duration_s DOUBLE PRECISION,
+  llm_prompt_tokens BIGINT,
+  llm_completion_tokens BIGINT,
+  tts_char_count BIGINT,
   recorded_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ------------------------------------------------------------
