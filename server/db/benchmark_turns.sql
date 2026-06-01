@@ -4,7 +4,11 @@ CREATE TABLE IF NOT EXISTS benchmark_turns (
   stt_latency_ms  DOUBLE PRECISION NOT NULL,
   llm_latency_ms  DOUBLE PRECISION NOT NULL,
   tts_latency_ms  DOUBLE PRECISION NOT NULL,
-  e2e_latency_ms  DOUBLE PRECISION NOT NULL,
+  e2e_latency_ms        DOUBLE PRECISION NOT NULL,
+  stt_audio_duration_s  DOUBLE PRECISION,
+  llm_prompt_tokens     BIGINT,
+  llm_completion_tokens BIGINT,
+  tts_char_count        BIGINT,
   PRIMARY KEY (run_id, turn_number)
 );
 
