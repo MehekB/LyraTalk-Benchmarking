@@ -86,15 +86,23 @@ def _turns_for_api(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
         e2e = t.get("e2e_latency_ms")
         if stt is None or llm is None or tts is None or e2e is None:
             continue
-        out.append(
-            {
-                "turn_number": t.get("turn", len(out) + 1),
-                "stt_latency_ms": stt,
-                "llm_latency_ms": llm,
-                "tts_latency_ms": tts,
-                "e2e_latency_ms": e2e,
-            }
-        )
+        turn: dict[str, Any] = {
+            "turn_number":    t.get("turn", len(out) + 1),
+            "stt_latency_ms": stt,
+            "llm_latency_ms": llm,
+            "tts_latency_ms": tts,
+            "e2e_latency_ms": e2e,
+        }
+        # ── NEW: cost-related fields (nullable — include only when present) ──
+        if t.get("stt_audio_duration_s") is not None:
+            turn["stt_audio_duration_s"] = t["stt_audio_duration_s"]
+        if t.get("llm_prompt_tokens") is not None:
+            turn["llm_prompt_tokens"] = t["llm_prompt_tokens"]
+        if t.get("llm_completion_tokens") is not None:
+            turn["llm_completion_tokens"] = t["llm_completion_tokens"]
+        if t.get("tts_char_count") is not None:
+            turn["tts_char_count"] = t["tts_char_count"]
+        out.append(turn)
     return out
 
 
@@ -173,6 +181,11 @@ class RunMetricsRecorder:
         self._stt_first_chunk_latency_sec: float | None = None
         self._pending_stt_ms: float | None = None
 
+        # ── NEW: STT audio duration accumulated from user ChatMessage metrics ──
+        self._pending_stt_audio_duration_s: float | None = None
+        self._pending_llm_prompt_tokens:     int | None = None
+        self._pending_llm_completion_tokens: int | None = None
+
         atexit.register(self._atexit_flush)
 
     def on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
@@ -204,6 +217,12 @@ class RunMetricsRecorder:
             self._speech_start_mono = None
             self._stt_first_chunk_latency_sec = None
 
+    def on_llm_metrics_collected(self, metrics) -> None:
+        # Fires after each LLM response — store tokens so on_conversation_item_added
+        # can pick them up when the assistant ChatMessage is finalized
+        self._pending_llm_prompt_tokens     = metrics.prompt_tokens
+        self._pending_llm_completion_tokens = metrics.completion_tokens
+
     def on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         item = ev.item
         if not isinstance(item, ChatMessage):
@@ -217,22 +236,56 @@ class RunMetricsRecorder:
             if not text:
                 return
             m = item.metrics
+            print("User ChatMessage metrics:", m)
             if self._pending_stt_ms is None and m and m.get("transcription_delay") is not None:
                 self._pending_stt_ms = _ms_from_seconds(m["transcription_delay"])
+
+            # Read audio duration before returning
+            started  = m.get("started_speaking_at")
+            stopped  = m.get("stopped_speaking_at")
+            if started is not None and stopped is not None:
+                self._pending_stt_audio_duration_s = round(float(stopped) - float(started), 3)
+
             return
 
         m = item.metrics or {}
+
+        # ── NEW: TTS char count — length of the text sent to TTS this turn ───
+        tts_char_count: int | None = len(text) if text else None
+ 
+        # ── NEW: LLM token counts from assistant metrics ──────────────────────
+        # LiveKit exposes these as llm_input_tokens / llm_output_tokens.
+        llm_prompt_tokens     = self._pending_llm_prompt_tokens
+        llm_completion_tokens = self._pending_llm_completion_tokens
+
+        print("STT AUDIO DURATION:", self._pending_stt_audio_duration_s)
+        print("TTS CHAR COUNT:", tts_char_count)
+        print("LLM PROMPT TOKENS:", llm_prompt_tokens)
+        print("LLM COMPLETION TOKENS:", llm_completion_tokens)
+
+
         with self._lock:
             self._turns.append(
                 {
-                    "turn": len(self._turns) + 1,
+                    "turn":           len(self._turns) + 1,
+                    # existing latency fields
                     "stt_latency_ms": self._pending_stt_ms,
                     "llm_latency_ms": _ms_from_seconds(m.get("llm_node_ttft")),
                     "tts_latency_ms": _ms_from_seconds(m.get("tts_node_ttfb")),
                     "e2e_latency_ms": _ms_from_seconds(m.get("e2e_latency")),
+                    # ── NEW: cost-related fields ──────────────────────────────
+                    "stt_audio_duration_s":  self._pending_stt_audio_duration_s,
+                    "llm_prompt_tokens":     llm_prompt_tokens,
+                    "llm_completion_tokens": llm_completion_tokens,
+                    "tts_char_count":        tts_char_count,
                 }
             )
+
         self._pending_stt_ms = None
+        self._pending_stt_audio_duration_s = None  # NEW
+        self._pending_llm_prompt_tokens     = None  # ← add
+        self._pending_llm_completion_tokens = None  # ← add
+        
 
     def on_session_close(self, _ev: CloseEvent) -> None:
         self.flush()
@@ -306,6 +359,11 @@ class RunMetricsRecorder:
                 "e2e_latency_ms": (
                     "User stopped speaking to agent started speaking (assistant metrics)"
                 ),
+                # ── NEW ──────────────────────────────────────────────────────
+                "stt_audio_duration_s":  "Audio duration (seconds) reported by STT provider per turn",
+                "llm_prompt_tokens":     "Input tokens sent to LLM (llm_input_tokens) per turn",
+                "llm_completion_tokens": "Output tokens generated by LLM (llm_output_tokens) per turn",
+                "tts_char_count":        "Character count of text sent to TTS per turn",
             },
             "turns": list(self._turns),
         }
@@ -334,6 +392,7 @@ def attach_run_metrics_recording(
     session.on("user_state_changed", recorder.on_user_state_changed)
     session.on("user_input_transcribed", recorder.on_user_input_transcribed)
     session.on("conversation_item_added", recorder.on_conversation_item_added)
+    session.llm.on("metrics_collected", recorder.on_llm_metrics_collected)
     session.on("close", recorder.on_session_close)
 
     async def _on_shutdown(_reason: str = "") -> None:

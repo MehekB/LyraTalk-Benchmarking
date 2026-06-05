@@ -14,15 +14,47 @@ import { useState } from 'react';
 import Modal from './ui/Modal';
 import { apiFetch } from '../lib/api';
 
-async function saveProviderToApi({ isEdit, provider, name, type, model }) {
-  const body = JSON.stringify({ name, type, model });
+const INPUT_PRICE_LABELS = {
+  llm: 'Input cost (per 1M tokens)',
+  tts: 'Cost (per 1M chars)',
+  stt: 'Cost (per minute)',
+};
+
+function formatPrice(value) {
+  if (value == null || value === '') return '';
+  return String(value);
+}
+
+function parsePriceInput(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : trimmed;
+}
+
+async function saveProviderToApi({
+  isEdit,
+  provider,
+  name,
+  type,
+  model,
+  inputUnitPrice,
+  outputUnitPrice,
+}) {
+  const body = {
+    name,
+    type,
+    model,
+    input_unit_price: inputUnitPrice,
+    ...(type === 'llm' ? { output_unit_price: outputUnitPrice } : {}),
+  };
   const path = isEdit
     ? `/api/providers/${encodeURIComponent(provider.id)}`
     : '/api/providers';
   const res = await apiFetch(path, {
     method: isEdit ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body,
+    body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -39,8 +71,19 @@ export default function ProviderModal({ provider, onSave, onClose }) {
   const [name,  setName]  = useState(provider?.name  ?? '');
   const [type,  setType]  = useState(provider?.type  ?? 'llm');
   const [model, setModel] = useState(provider?.model ?? '');
+  const [inputUnitPrice, setInputUnitPrice] = useState(
+    formatPrice(provider?.input_unit_price)
+  );
+  const [outputUnitPrice, setOutputUnitPrice] = useState(
+    formatPrice(provider?.output_unit_price)
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError]  = useState('');
+
+  const handleTypeChange = (nextType) => {
+    setType(nextType);
+    if (nextType !== 'llm') setOutputUnitPrice('');
+  };
 
   const handleSave = async () => {
     if (!name.trim() || !model.trim()) return;
@@ -53,12 +96,16 @@ export default function ProviderModal({ provider, onSave, onClose }) {
         name: name.trim(),
         type,
         model: model.trim(),
+        inputUnitPrice: parsePriceInput(inputUnitPrice),
+        outputUnitPrice: type === 'llm' ? parsePriceInput(outputUnitPrice) : null,
       });
       onSave({
         id: Number(row.id),
         name: row.name,
         type: row.type,
         model: row.model,
+        input_unit_price: row.input_unit_price,
+        output_unit_price: row.output_unit_price,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
@@ -93,7 +140,7 @@ export default function ProviderModal({ provider, onSave, onClose }) {
       </div>
       <div className="field">
         <label>Type</label>
-        <select value={type} onChange={e => setType(e.target.value)}>
+        <select value={type} onChange={e => handleTypeChange(e.target.value)}>
           <option value="llm">LLM</option>
           <option value="stt">STT</option>
           <option value="tts">TTS</option>
@@ -108,6 +155,30 @@ export default function ProviderModal({ provider, onSave, onClose }) {
           onChange={e => setModel(e.target.value)}
         />
       </div>
+      <div className="field">
+        <label>{INPUT_PRICE_LABELS[type]}</label>
+        <input
+          type="number"
+          min="0"
+          step="any"
+          placeholder="e.g. 2.50"
+          value={inputUnitPrice}
+          onChange={e => setInputUnitPrice(e.target.value)}
+        />
+      </div>
+      {type === 'llm' ? (
+        <div className="field">
+          <label>Output cost (per 1M tokens)</label>
+          <input
+            type="number"
+            min="0"
+            step="any"
+            placeholder="e.g. 10.00"
+            value={outputUnitPrice}
+            onChange={e => setOutputUnitPrice(e.target.value)}
+          />
+        </div>
+      ) : null}
       {error ? (
         <p className="modal-error" role="alert" style={{ color: '#c62828', marginTop: '0.75rem', fontSize: '0.9rem' }}>
           {error}

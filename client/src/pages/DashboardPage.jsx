@@ -10,8 +10,10 @@
 //   • 2 charts side-by-side: E2E bar chart (per turn) | Latency over time (line)
 //   • Full results table at the bottom
 // ─────────────────────────────────────────────────────────────────────────────
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useBenchmarkRuns } from '../hooks/useBenchmarkRuns';
+import { fetchProviders } from '../lib/providers';
+import { buildProviderPriceIndex, computeRunCost, formatCost } from '../lib/runCost';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const ms2s = ms => (ms == null ? '—' : (ms / 1000).toFixed(2) + 's');
@@ -26,8 +28,26 @@ const providerLabel = (name, model) => {
 export default function DashboardPage({ runId }) {
   const { runs, loading, error } = useBenchmarkRuns();
   const [tab, setTab] = useState('results');
+  const [providers, setProviders] = useState([]);
 
-  const completed = runs.filter(r => r.status === 'completed' && r.turns?.length);
+  useEffect(() => {
+    fetchProviders()
+      .then(setProviders)
+      .catch(() => setProviders([]));
+  }, []);
+
+  const priceIndex = useMemo(
+    () => buildProviderPriceIndex(providers),
+    [providers]
+  );
+
+  const completed = useMemo(() => {
+    const done = runs.filter(r => r.status === 'completed' && r.turns?.length);
+    return done.map(r => ({
+      ...r,
+      cost: computeRunCost(r, priceIndex),
+    }));
+  }, [runs, priceIndex]);
 
   // If runId is provided, show that run; otherwise latest
   const latest = runId
@@ -155,8 +175,12 @@ export default function DashboardPage({ runId }) {
               />
               <KpiCard
                 label="COST PER RUN"
-                value="—"
-                sub={<span style={S.targetText}>No data yet</span>}
+                value={formatCost(kpis.cost) ?? '—'}
+                sub={
+                  kpis.cost != null
+                    ? 'From usage × provider rates'
+                    : <span style={S.targetText}>No usage or pricing data</span>
+                }
               />
               <KpiCard
                 label="TOOL CALL ACCURACY"
@@ -223,7 +247,7 @@ export default function DashboardPage({ runId }) {
                     <td>{ms2s(r.avg_stt_ms)}</td>
                     <td>{ms2s(r.avg_llm_ms)}</td>
                     <td>{ms2s(r.avg_tts_ms)}</td>
-                    <td>${r.cost?.toFixed(3) ?? '—'}</td>
+                    <td>{formatCost(r.cost) ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -335,7 +359,7 @@ function ABComparison({ runs }) {
     { key: 'avg_stt_ms', label: 'Avg STT' },
     { key: 'avg_llm_ms', label: 'Avg LLM' },
     { key: 'avg_tts_ms', label: 'Avg TTS' },
-    { key: 'cost',       label: 'Cost',    fmt: v => `$${v?.toFixed(3)}` },
+    { key: 'cost', label: 'Cost', fmt: v => formatCost(v) ?? '—' },
   ];
 
   return (

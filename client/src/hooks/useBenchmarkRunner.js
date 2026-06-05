@@ -1,52 +1,60 @@
 // hooks/useBenchmarkRunner.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Encapsulates the logic for starting a benchmark run and simulating
-// progress updates. In a real app, `startRun` would POST to your API and
-// then poll GET /api/runs/:id every few seconds via React Query until
-// status === 'completed' | 'failed'.
-// ─────────────────────────────────────────────────────────────────────────────
-import { useCallback } from 'react';
-import { useAppState, useAppDispatch } from './useAppState';
+import { useCallback, useState } from "react";
+import { fetchBenchmarkRuns } from "../lib/benchmarkRuns";
+import { pollForNewBenchmarkRun, startBenchmarkSession } from "../lib/benchmarkSessions";
 
 export function useBenchmarkRunner() {
-  const { nextRunId } = useAppState();
-  const dispatch = useAppDispatch();
+  const [sessionStatus, setSessionStatus] = useState(null);
 
-  const startRun = useCallback(({ provider, model, type, dataset, iterations }) => {
-    const id = nextRunId;
+  const startRun = useCallback(async (config, { onRunComplete } = {}) => {
+    setSessionStatus({ phase: "starting", message: "Starting local voice agent…" });
 
-    // 1. Add run in "running" state
-    dispatch({
-      type: 'ADD_RUN',
-      payload: { provider, model, type, dataset, iterations, status: 'running', progress: 0,
-                 p50: null, p95: null, accuracy: null, cost: null },
-    });
+    try {
+      const runsBefore = await fetchBenchmarkRuns();
+      const sinceId = runsBefore.reduce((max, r) => Math.max(max, r.id), 0);
 
-    // 2. Simulate progress ticks (replace with real polling in production)
-    let p = 0;
-    const iv = setInterval(() => {
-      p += Math.random() * 18 + 5;
-      const progress = Math.min(Math.round(p), 100);
-      const done = progress >= 100;
+      const session = await startBenchmarkSession(config);
 
-      dispatch({
-        type: 'UPDATE_RUN',
-        payload: {
-          id,
-          progress,
-          ...(done && {
-            status:   'completed',
-            p50:      Math.round(200 + Math.random() * 400),
-            p95:      Math.round(200 + Math.random() * 400 * 2),
-            accuracy: parseFloat((0.78 + Math.random() * 0.20).toFixed(2)),
-            cost:     parseFloat((0.01 + Math.random() * 0.06).toFixed(3)),
-          }),
-        },
+      setSessionStatus({
+        phase: "waiting",
+        message: session.alreadyRunning
+          ? "Agent console already running — switch to the Terminal window and talk to the agent."
+          : session.launchMethod === "terminal"
+            ? "Terminal opened — talk to the agent in the new window, then end the session."
+            : "Agent process started — use the terminal to talk to the agent, then end the session.",
+        pipeline: session.pipeline,
+        instructions: session.instructions,
+        pid: session.pid,
+        launchMethod: session.launchMethod,
+        command: session.command,
       });
 
-      if (done) clearInterval(iv);
-    }, 350);
-  }, [nextRunId, dispatch]);
+      const newRun = await pollForNewBenchmarkRun(sinceId);
 
-  return { startRun };
+      if (newRun) {
+        setSessionStatus({
+          phase: "completed",
+          message: `Benchmark saved (${newRun.turns.length} turn${newRun.turns.length === 1 ? "" : "s"}).`,
+          run: newRun,
+        });
+        onRunComplete?.(newRun);
+        return newRun;
+      }
+
+      setSessionStatus({
+        phase: "timeout",
+        message:
+          "No new benchmark run yet. End the voice session in Terminal (Ctrl+C), and ensure the API server is running.",
+      });
+      return null;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to start benchmark";
+      setSessionStatus({ phase: "error", message });
+      throw e;
+    }
+  }, []);
+
+  const clearSessionStatus = useCallback(() => setSessionStatus(null), []);
+
+  return { startRun, sessionStatus, clearSessionStatus };
 }

@@ -16,6 +16,20 @@ async function lookupProviderId(client, model, type) {
   return rows[0]?.id ?? null;
 }
 
+function optionalNonNegativeNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return { error: true };
+  return n;
+}
+
+function optionalNonNegativeInt(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) return { error: true };
+  return n;
+}
+
 function normalizeTurn(raw, index) {
   const turnNumber = Number(raw?.turn_number ?? raw?.turn ?? index + 1);
   const stt = Number(raw?.stt_latency_ms);
@@ -33,12 +47,29 @@ function normalizeTurn(raw, index) {
   ) {
     return null;
   }
+
+  const sttAudioDurationS = optionalNonNegativeNumber(raw?.stt_audio_duration_s);
+  if (sttAudioDurationS && typeof sttAudioDurationS === "object") return null;
+
+  const llmPromptTokens = optionalNonNegativeInt(raw?.llm_prompt_tokens);
+  if (llmPromptTokens && typeof llmPromptTokens === "object") return null;
+
+  const llmCompletionTokens = optionalNonNegativeInt(raw?.llm_completion_tokens);
+  if (llmCompletionTokens && typeof llmCompletionTokens === "object") return null;
+
+  const ttsCharCount = optionalNonNegativeInt(raw?.tts_char_count);
+  if (ttsCharCount && typeof ttsCharCount === "object") return null;
+
   return {
     turn_number: turnNumber,
     stt_latency_ms: stt,
     llm_latency_ms: llm,
     tts_latency_ms: tts,
     e2e_latency_ms: e2e,
+    stt_audio_duration_s: sttAudioDurationS,
+    llm_prompt_tokens: llmPromptTokens,
+    llm_completion_tokens: llmCompletionTokens,
+    tts_char_count: ttsCharCount,
   };
 }
 
@@ -65,7 +96,11 @@ export default function benchmarkRunsRouter(pool) {
                  'stt_latency_ms', bt.stt_latency_ms,
                  'llm_latency_ms', bt.llm_latency_ms,
                  'tts_latency_ms', bt.tts_latency_ms,
-                 'e2e_latency_ms', bt.e2e_latency_ms
+                 'e2e_latency_ms', bt.e2e_latency_ms,
+                 'stt_audio_duration_s', bt.stt_audio_duration_s,
+                 'llm_prompt_tokens', bt.llm_prompt_tokens,
+                 'llm_completion_tokens', bt.llm_completion_tokens,
+                 'tts_char_count', bt.tts_char_count
                )
                ORDER BY bt.turn_number
              ) FILTER (WHERE bt.turn_number IS NOT NULL),
@@ -125,7 +160,7 @@ export default function benchmarkRunsRouter(pool) {
       if (!t) {
         return res.status(400).json({
           error:
-            "Each turn needs turn_number (1–3) and finite stt/llm/tts/e2e latency values (ms)",
+            "Each turn needs turn_number (1–3), finite stt/llm/tts/e2e latency values (ms), and optional non-negative usage metrics",
           index: i,
         });
       }
@@ -174,9 +209,10 @@ export default function benchmarkRunsRouter(pool) {
         await client.query(
           `INSERT INTO benchmark_turns (
              run_id, turn_number,
-             stt_latency_ms, llm_latency_ms, tts_latency_ms, e2e_latency_ms
+             stt_latency_ms, llm_latency_ms, tts_latency_ms, e2e_latency_ms,
+             stt_audio_duration_s, llm_prompt_tokens, llm_completion_tokens, tts_char_count
            )
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
             runId,
             t.turn_number,
@@ -184,6 +220,10 @@ export default function benchmarkRunsRouter(pool) {
             t.llm_latency_ms,
             t.tts_latency_ms,
             t.e2e_latency_ms,
+            t.stt_audio_duration_s,
+            t.llm_prompt_tokens,
+            t.llm_completion_tokens,
+            t.tts_char_count,
           ]
         );
       }

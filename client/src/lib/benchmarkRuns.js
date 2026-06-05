@@ -30,6 +30,13 @@ export function mapBenchmarkRun(row) {
     llm: t.llm_latency_ms,
     tts: t.tts_latency_ms,
     e2e: t.e2e_latency_ms,
+    stt_audio_duration_s:
+      t.stt_audio_duration_s != null ? Number(t.stt_audio_duration_s) : null,
+    llm_prompt_tokens:
+      t.llm_prompt_tokens != null ? Number(t.llm_prompt_tokens) : null,
+    llm_completion_tokens:
+      t.llm_completion_tokens != null ? Number(t.llm_completion_tokens) : null,
+    tts_char_count: t.tts_char_count != null ? Number(t.tts_char_count) : null,
   }));
 
   const stts = turns.map((t) => t.stt);
