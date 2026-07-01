@@ -10,6 +10,14 @@ export default function benchmarkSessionsRouter() {
   });
 
   router.post("/start", (req, res) => {
+    // Disable agent spawning in production (Railway environment)
+    if (process.env.RAILWAY_ENVIRONMENT_NAME) {
+      return res.status(503).json({
+        error: "Agent console spawning is not available in production",
+        hint: "Run the agent locally: cd agent && uv run python src/agent.py console",
+      });
+    }
+
     const pipeline = {
       stt_model: process.env.BENCHMARK_STT_MODEL?.trim() || "deepgram/nova-3",
       llm_model: process.env.BENCHMARK_LLM_MODEL?.trim() || "xai/grok-4-1-fast-non-reasoning",
@@ -63,3 +71,4 @@ export default function benchmarkSessionsRouter() {
 
   return router;
 }
+
