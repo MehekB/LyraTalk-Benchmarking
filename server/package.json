@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node index.mjs",
     "dev": "node --watch index.mjs",
     "db:test": "node scripts/test-db.mjs",
     "db:schema": "node scripts/apply-schema.mjs"
