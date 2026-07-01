@@ -44,6 +44,11 @@ RUN uv sync --locked
 # (Excludes files specified in .dockerignore)
 COPY . .
 
+# Pre-download any ML models or files the agent needs
+# This ensures the container is ready to run immediately without downloading
+# dependencies at runtime, which improves startup time and reliability
+RUN . .venv/bin/activate && python -m livekit.agents.cli download-files src.agent
+
 # --- Production stage ---
 # Build tools (gcc, g++, python3-dev) are not included in the final image
 FROM base
